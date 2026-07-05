@@ -1,0 +1,5 @@
+.state/
+certops.lab.yaml
+step-password.txt
+target/ssh/authorized_keys
+generic-roots/*.pem
