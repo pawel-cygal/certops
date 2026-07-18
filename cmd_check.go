@@ -13,7 +13,7 @@ import (
 )
 
 func cmdCheck(args []string) {
-	args = normalizeFlagArgs(args, map[string]bool{"--warn-days": true, "--critical-days": true, "--ca-bundle": true, "--fail-on": true, "--timeout": true, "--html": true, "--otel-endpoint": true, "--interval": true, "--watch-timeout": true, "--max-iterations": true})
+	args = normalizeFlagArgs(args, map[string]bool{"--warn-days": true, "--critical-days": true, "--ca-bundle": true, "--crl": true, "--crl-ca-bundle": true, "--crl-warn-days": true, "--crl-critical-days": true, "--crl-max-age-days": true, "--fail-on": true, "--timeout": true, "--html": true, "--otel-endpoint": true, "--interval": true, "--watch-timeout": true, "--max-iterations": true})
 	fs := flag.NewFlagSet("check", flag.ExitOnError)
 	jsonOut := fs.Bool("json", false, "emit JSON")
 	yamlOut := fs.Bool("yaml", false, "emit YAML-like output")
@@ -23,6 +23,12 @@ func cmdCheck(args []string) {
 	warnDays := fs.Int("warn-days", 30, "warning threshold for certificate expiry")
 	criticalDays := fs.Int("critical-days", 14, "critical threshold for certificate expiry")
 	caBundle := fs.String("ca-bundle", "", "PEM root/intermediate CA bundle used for additional trust validation")
+	var crls stringListFlag
+	fs.Var(&crls, "crl", "CRL file or URL used for revocation validation (repeatable or comma-separated)")
+	crlCABundle := fs.String("crl-ca-bundle", "", "PEM CA bundle used to verify CRL signatures")
+	crlWarnDays := fs.Int("crl-warn-days", 3, "warning threshold for CRL nextUpdate")
+	crlCriticalDays := fs.Int("crl-critical-days", 1, "critical threshold for CRL nextUpdate")
+	crlMaxAgeDays := fs.Int("crl-max-age-days", 0, "warning threshold for CRL thisUpdate age (0 = disabled)")
 	failOn := fs.String("fail-on", "critical", "exit non-zero on warn or critical")
 	timeout := fs.Duration("timeout", 10*time.Second, "network timeout")
 	watch := fs.Bool("watch", false, "rerun the check until interrupted")
@@ -58,11 +64,17 @@ func cmdCheck(args []string) {
 	}
 
 	runOnce := func() checker.Report {
+		crlBundle := defaultCRLCABundle(*crlCABundle, *caBundle)
 		return checker.Run(context.Background(), host, address, checker.Options{
-			WarnDays:     *warnDays,
-			CriticalDays: *criticalDays,
-			Timeout:      *timeout,
-			CABundle:     *caBundle,
+			WarnDays:        *warnDays,
+			CriticalDays:    *criticalDays,
+			Timeout:         *timeout,
+			CABundle:        *caBundle,
+			CRLSources:      []string(crls),
+			CRLCABundle:     crlBundle,
+			CRLWarnDays:     *crlWarnDays,
+			CRLCriticalDays: *crlCriticalDays,
+			CRLMaxAgeDays:   *crlMaxAgeDays,
 		})
 	}
 	if watchCfg.Enabled {
@@ -133,6 +145,7 @@ func printRawReport(report checker.Report) {
 		{"tls", "handshake_ms", strconv.FormatInt(report.TLS.HandshakeMS, 10), "info"},
 		{"https", "http_redirect", statusColor(httpRedirectCell(report)), statusColor(httpRedirectStatus(report))},
 		{"https", "hsts", hstsCell(report.HTTPS.HSTS), statusColor(warnIfFalse(strings.TrimSpace(report.HTTPS.HSTS) != ""))},
+		{"revocation", "crl", revocationCell(report), revocationStatus(report)},
 	}
 	renderTable([]string{"scope", "check", "value", "status"}, rows)
 
@@ -262,6 +275,41 @@ func hstsCell(value string) string {
 	return value
 }
 
+func revocationCell(report checker.Report) string {
+	if !report.Revocation.Checked {
+		return "not checked"
+	}
+	if report.Revocation.Revoked {
+		return statusColor("revoked")
+	}
+	if len(report.Revocation.Errors) > 0 {
+		return statusColor("errors")
+	}
+	return statusColor("not revoked")
+}
+
+func revocationStatus(report checker.Report) string {
+	if !report.Revocation.Checked {
+		return "info"
+	}
+	if report.Revocation.Revoked || len(report.Revocation.Errors) > 0 {
+		return statusColor("critical")
+	}
+	status := "ok"
+	for _, finding := range report.Findings {
+		if finding.Scope != "revocation" {
+			continue
+		}
+		if finding.Severity == "critical" {
+			return statusColor("critical")
+		}
+		if finding.Severity == "warn" {
+			status = "warn"
+		}
+	}
+	return statusColor(status)
+}
+
 func compactList(values []string, max int) string {
 	if len(values) == 0 {
 		return "-"
@@ -302,4 +350,11 @@ func exitForReports(reports []checker.Report, failOn string) int {
 		}
 	}
 	return 0
+}
+
+func defaultCRLCABundle(crlCABundle, caBundle string) string {
+	if strings.TrimSpace(crlCABundle) != "" {
+		return crlCABundle
+	}
+	return caBundle
 }

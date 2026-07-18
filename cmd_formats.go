@@ -42,6 +42,17 @@ func printYAMLReports(reports []checker.Report) {
 		fmt.Println("    https:")
 		fmt.Printf("      http_redirect_ok: %t\n", report.HTTPS.HTTPRedirectOK)
 		fmt.Printf("      hsts: %q\n", report.HTTPS.HSTS)
+		fmt.Println("    revocation:")
+		fmt.Printf("      checked: %t\n", report.Revocation.Checked)
+		fmt.Printf("      revoked: %t\n", report.Revocation.Revoked)
+		fmt.Println("      sources:")
+		for _, source := range report.Revocation.Sources {
+			fmt.Printf("        - %q\n", source)
+		}
+		fmt.Println("      errors:")
+		for _, err := range report.Revocation.Errors {
+			fmt.Printf("        - %q\n", err)
+		}
 		fmt.Println("    findings:")
 		for _, finding := range report.Findings {
 			fmt.Printf("      - severity: %q\n", finding.Severity)
@@ -66,6 +77,10 @@ func printPromReports(reports []checker.Report) {
 	fmt.Println("# TYPE certops_tls_ocsp_stapling gauge")
 	fmt.Println("# HELP certops_https_hsts HSTS header status (1=present, 0=missing).")
 	fmt.Println("# TYPE certops_https_hsts gauge")
+	fmt.Println("# HELP certops_certificate_revocation_checked Certificate CRL revocation check status (1=checked, 0=not checked).")
+	fmt.Println("# TYPE certops_certificate_revocation_checked gauge")
+	fmt.Println("# HELP certops_certificate_revoked Certificate revocation status (1=revoked, 0=not revoked or unchecked).")
+	fmt.Println("# TYPE certops_certificate_revoked gauge")
 
 	for _, report := range reports {
 		base := map[string]string{"target": report.Target, "host": report.Host}
@@ -88,6 +103,8 @@ func printPromReports(reports []checker.Report) {
 		}
 		fmt.Printf("certops_tls_ocsp_stapling{%s} %d\n", promLabels(base), boolInt(report.TLS.OCSPStapling))
 		fmt.Printf("certops_https_hsts{%s} %d\n", promLabels(base), boolInt(strings.TrimSpace(report.HTTPS.HSTS) != ""))
+		fmt.Printf("certops_certificate_revocation_checked{%s} %d\n", promLabels(base), boolInt(report.Revocation.Checked))
+		fmt.Printf("certops_certificate_revoked{%s} %d\n", promLabels(base), boolInt(report.Revocation.Revoked))
 	}
 }
 

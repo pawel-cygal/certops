@@ -3,6 +3,7 @@ package main
 type certopsConfig struct {
 	Policy    configPolicy    `json:"policy" yaml:"policy"`
 	CAs       []configCA      `json:"cas" yaml:"cas"`
+	CRLs      []configCRL     `json:"crls" yaml:"crls"`
 	Inventory configInventory `json:"inventory" yaml:"inventory"`
 	Trust     configTrust     `json:"trust" yaml:"trust"`
 	Services  []configService `json:"services" yaml:"services"`
@@ -12,6 +13,8 @@ type configPolicy struct {
 	FailOn               string `json:"fail_on" yaml:"fail_on"`
 	MinCADaysRemaining   int    `json:"min_ca_days_remaining" yaml:"min_ca_days_remaining"`
 	MinLeafDaysRemaining int    `json:"min_leaf_days_remaining" yaml:"min_leaf_days_remaining"`
+	MinCRLDaysRemaining  int    `json:"min_crl_days_remaining" yaml:"min_crl_days_remaining"`
+	MaxCRLAgeDays        int    `json:"max_crl_age_days" yaml:"max_crl_age_days"`
 	AllowUnmanagedRoots  bool   `json:"allow_unmanaged_roots" yaml:"allow_unmanaged_roots"`
 }
 
@@ -26,6 +29,17 @@ type configCA struct {
 	Issuer      string `json:"issuer,omitempty" yaml:"issuer,omitempty"`
 	Label       string `json:"label,omitempty" yaml:"label,omitempty"`
 	Profile     string `json:"profile,omitempty" yaml:"profile,omitempty"`
+}
+
+type configCRL struct {
+	Name         string `json:"name" yaml:"name"`
+	CA           string `json:"ca,omitempty" yaml:"ca,omitempty"`
+	URL          string `json:"url,omitempty" yaml:"url,omitempty"`
+	File         string `json:"file,omitempty" yaml:"file,omitempty"`
+	WarnDays     int    `json:"warn_days,omitempty" yaml:"warn_days,omitempty"`
+	CriticalDays int    `json:"critical_days,omitempty" yaml:"critical_days,omitempty"`
+	MaxAgeDays   int    `json:"max_age_days,omitempty" yaml:"max_age_days,omitempty"`
+	Insecure     bool   `json:"insecure,omitempty" yaml:"insecure,omitempty"`
 }
 
 type configInventory struct {
@@ -62,6 +76,7 @@ type configService struct {
 	CA               string   `json:"ca,omitempty" yaml:"ca,omitempty"`
 	ExpectedNames    []string `json:"expected_names,omitempty" yaml:"expected_names,omitempty"`
 	AllowedIssuers   []string `json:"allowed_issuers,omitempty" yaml:"allowed_issuers,omitempty"`
+	CRLs             []string `json:"crls,omitempty" yaml:"crls,omitempty"`
 	MinDaysRemaining int      `json:"min_days_remaining,omitempty" yaml:"min_days_remaining,omitempty"`
 	RequireTLS13     bool     `json:"require_tls13,omitempty" yaml:"require_tls13,omitempty"`
 	RequireHSTS      bool     `json:"require_hsts,omitempty" yaml:"require_hsts,omitempty"`

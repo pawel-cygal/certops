@@ -23,7 +23,7 @@ func cmdDrift(args []string) {
 	jsonOut := fs.Bool("json", false, "emit JSON")
 	yamlOut := fs.Bool("yaml", false, "emit YAML")
 	htmlOut := fs.String("html", "", "write HTML report to path")
-	failOn := fs.String("fail-on", "warn", "exit non-zero on warn or critical")
+	failOn := fs.String("fail-on", "", "exit non-zero on warn or critical; defaults to policy.fail_on or warn")
 	timeout := fs.Duration("timeout", 10*time.Second, "network timeout for live checks")
 	noLive := fs.Bool("no-live", false, "skip live CA and service checks")
 	fs.Parse(args)
@@ -44,7 +44,7 @@ func cmdDrift(args []string) {
 		}
 	}
 	printDriftReport(report, format)
-	os.Exit(exitForDrift(report, *failOn))
+	os.Exit(exitForDrift(report, effectiveFailOn(*failOn, cfg.Policy.FailOn, "warn")))
 }
 
 func buildDriftReport(plan planReport) driftReport {
@@ -89,10 +89,7 @@ func printDriftReport(report driftReport, format outputFormat) {
 }
 
 func exitForDrift(report driftReport, failOn string) int {
-	failOn = strings.ToLower(strings.TrimSpace(failOn))
-	if failOn == "" {
-		failOn = "warn"
-	}
+	failOn = effectiveFailOn(failOn, "", "warn")
 	if report.Summary.Critical > 0 {
 		return 1
 	}

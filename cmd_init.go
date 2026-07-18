@@ -11,6 +11,8 @@ const starterConfig = `policy:
   fail_on: warn
   min_ca_days_remaining: 180
   min_leaf_days_remaining: 30
+  min_crl_days_remaining: 3
+  max_crl_age_days: 7
   allow_unmanaged_roots: false
 
 cas:
@@ -29,6 +31,13 @@ cas:
     provider: generic
     ca_bundle: vendor-root.pem
     fingerprint: SHA256:11:22:...
+
+crls:
+  - name: lan-step-crl
+    ca: lan-step
+    url: https://ca.lan.example.com/crl
+    warn_days: 3
+    critical_days: 1
 
 inventory:
   groups:
@@ -49,6 +58,8 @@ services:
   - name: internal-api
     url: https://api.lan.example.com
     ca: lan-step
+    crls:
+      - lan-step-crl
     expected_names:
       - api.lan.example.com
     require_tls13: true

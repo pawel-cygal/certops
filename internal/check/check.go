@@ -11,13 +11,20 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	crlcheck "certops/internal/crl"
 )
 
 type Options struct {
-	WarnDays     int
-	CriticalDays int
-	Timeout      time.Duration
-	CABundle     string
+	WarnDays        int
+	CriticalDays    int
+	Timeout         time.Duration
+	CABundle        string
+	CRLSources      []string
+	CRLCABundle     string
+	CRLWarnDays     int
+	CRLCriticalDays int
+	CRLMaxAgeDays   int
 }
 
 type Finding struct {
@@ -53,16 +60,24 @@ type HTTPSInfo struct {
 	HSTS                string `json:"hsts,omitempty"`
 }
 
+type RevocationInfo struct {
+	Checked bool     `json:"checked"`
+	Sources []string `json:"sources,omitempty"`
+	Revoked bool     `json:"revoked"`
+	Errors  []string `json:"errors,omitempty"`
+}
+
 type Report struct {
-	Target      string      `json:"target"`
-	Host        string      `json:"host"`
-	Address     string      `json:"address"`
-	Status      string      `json:"status"`
-	Certificate Certificate `json:"certificate"`
-	TLS         TLSInfo     `json:"tls"`
-	HTTPS       HTTPSInfo   `json:"https"`
-	Findings    []Finding   `json:"findings,omitempty"`
-	Error       string      `json:"error,omitempty"`
+	Target      string         `json:"target"`
+	Host        string         `json:"host"`
+	Address     string         `json:"address"`
+	Status      string         `json:"status"`
+	Certificate Certificate    `json:"certificate"`
+	TLS         TLSInfo        `json:"tls"`
+	HTTPS       HTTPSInfo      `json:"https"`
+	Revocation  RevocationInfo `json:"revocation"`
+	Findings    []Finding      `json:"findings,omitempty"`
+	Error       string         `json:"error,omitempty"`
 }
 
 func Run(ctx context.Context, host, address string, opts Options) Report {
@@ -74,6 +89,12 @@ func Run(ctx context.Context, host, address string, opts Options) Report {
 	}
 	if opts.Timeout == 0 {
 		opts.Timeout = 10 * time.Second
+	}
+	if opts.CRLWarnDays == 0 {
+		opts.CRLWarnDays = 3
+	}
+	if opts.CRLCriticalDays == 0 {
+		opts.CRLCriticalDays = 1
 	}
 
 	report := Report{
@@ -139,6 +160,7 @@ func Run(ctx context.Context, host, address string, opts Options) Report {
 		report.Certificate.Trusted = false
 		add(&report, "critical", "certificate", "certificate chain is not trusted: "+systemTrustErr.Error())
 	}
+	checkRevocation(ctx, &report, state.PeerCertificates, opts)
 
 	if supports(report.TLS.SupportedVersions, "TLS1.0") {
 		add(&report, "warn", "tls", "TLS 1.0 is accepted")
@@ -290,6 +312,43 @@ func verifyWithCABundle(leaf *x509.Certificate, certs []*x509.Certificate, host,
 		Intermediates: intermediates(certs),
 	})
 	return err
+}
+
+func checkRevocation(ctx context.Context, report *Report, certs []*x509.Certificate, opts Options) {
+	if len(opts.CRLSources) == 0 {
+		return
+	}
+	report.Revocation.Checked = true
+	report.Revocation.Sources = append([]string(nil), opts.CRLSources...)
+	lists := make([]*x509.RevocationList, 0, len(opts.CRLSources))
+	for _, source := range opts.CRLSources {
+		crlReport, list, err := crlcheck.Check(ctx, crlcheck.Options{
+			Source:       source,
+			CABundle:     opts.CRLCABundle,
+			WarnDays:     opts.CRLWarnDays,
+			CriticalDays: opts.CRLCriticalDays,
+			MaxAgeDays:   opts.CRLMaxAgeDays,
+			Timeout:      opts.Timeout,
+		})
+		for _, finding := range crlReport.Findings {
+			add(report, finding.Severity, "revocation", fmt.Sprintf("CRL %s: %s", source, finding.Message))
+		}
+		if err != nil {
+			report.Revocation.Errors = append(report.Revocation.Errors, err.Error())
+			continue
+		}
+		if list != nil {
+			lists = append(lists, list)
+		}
+	}
+	for _, cert := range certs {
+		revoked, issuer := crlcheck.CertificateRevoked(cert, lists)
+		if !revoked {
+			continue
+		}
+		report.Revocation.Revoked = true
+		add(report, "critical", "revocation", fmt.Sprintf("certificate serial %s is revoked by CRL issuer %s", cert.SerialNumber.String(), issuer))
+	}
 }
 
 func loadCertPool(path string) (*x509.CertPool, error) {

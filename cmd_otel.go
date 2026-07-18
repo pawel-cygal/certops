@@ -9,6 +9,7 @@ import (
 	"time"
 
 	checker "certops/internal/check"
+	crlcheck "certops/internal/crl"
 	"certops/internal/verify"
 )
 
@@ -79,6 +80,8 @@ func exportReportsOTEL(endpoint string, reports []checker.Report) error {
 			otelMetricInt("certops.certificate.days_remaining", "Days remaining until certificate expiration", "d", base, report.Certificate.DaysRemaining, now),
 			otelMetricInt("certops.certificate.trusted", "Certificate chain trust status", "", base, boolInt(report.Certificate.Trusted), now),
 			otelMetricInt("certops.certificate.matches_host", "Certificate hostname match status", "", base, boolInt(report.Certificate.MatchesHost), now),
+			otelMetricInt("certops.certificate.revocation_checked", "Certificate CRL revocation check status", "", base, boolInt(report.Revocation.Checked), now),
+			otelMetricInt("certops.certificate.revoked", "Certificate revocation status", "", base, boolInt(report.Revocation.Revoked), now),
 			otelMetricInt("certops.tls.ocsp_stapling", "OCSP stapling status", "", base, boolInt(report.TLS.OCSPStapling), now),
 			otelMetricInt("certops.https.hsts", "HSTS header status", "", base, boolInt(strings.TrimSpace(report.HTTPS.HSTS) != ""), now),
 		)
@@ -111,6 +114,33 @@ func exportVerifyOTEL(endpoint string, report verify.Report) error {
 		otelMetricInt("certops.verify.summary.total", "Total number of targets", "", map[string]string{"file": report.File}, report.Total, now),
 		otelMetricInt("certops.verify.summary.errors", "Number of failed targets", "", map[string]string{"file": report.File}, report.Errors, now),
 	)
+	return postOTLP(endpoint, "certops", metrics)
+}
+
+func exportCRLReportsOTEL(endpoint string, reports []crlcheck.Report) error {
+	if strings.TrimSpace(endpoint) == "" {
+		return nil
+	}
+	now := time.Now()
+	metrics := make([]otelMetric, 0, len(reports)*9)
+	for _, report := range reports {
+		base := map[string]string{"name": report.Name, "source": report.Source, "issuer": shortIssuer(report.Issuer)}
+		for _, status := range []string{"ok", "warn", "critical"} {
+			metrics = append(metrics, otelMetricInt("certops.crl.status", "CRL aggregate status", "", map[string]string{
+				"name":   report.Name,
+				"source": report.Source,
+				"issuer": shortIssuer(report.Issuer),
+				"status": status,
+			}, boolInt(report.Status == status), now))
+		}
+		metrics = append(metrics,
+			otelMetricInt("certops.crl.next_update_days", "Days remaining until CRL nextUpdate", "d", base, report.DaysRemaining, now),
+			otelMetricInt("certops.crl.age_seconds", "Seconds since CRL thisUpdate", "s", base, int(report.AgeSeconds), now),
+			otelMetricInt("certops.crl.fetch_ok", "CRL fetch and parse status", "", base, boolInt(report.Error == ""), now),
+			otelMetricInt("certops.crl.signature_valid", "CRL signature validation status", "", base, boolInt(report.SignatureValid), now),
+			otelMetricInt("certops.crl.revoked_certificates", "Number of revoked certificate entries in the CRL", "", base, report.RevokedCertificates, now),
+		)
+	}
 	return postOTLP(endpoint, "certops", metrics)
 }
 

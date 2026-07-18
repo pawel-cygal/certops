@@ -52,7 +52,7 @@ func cmdPlan(args []string) {
 	jsonOut := fs.Bool("json", false, "emit JSON")
 	yamlOut := fs.Bool("yaml", false, "emit YAML")
 	htmlOut := fs.String("html", "", "write HTML report to path")
-	failOn := fs.String("fail-on", "critical", "exit non-zero on warn or critical")
+	failOn := fs.String("fail-on", "", "exit non-zero on warn or critical; defaults to policy.fail_on or critical")
 	live := fs.Bool("live", false, "run live CA and service checks")
 	timeout := fs.Duration("timeout", 10*time.Second, "network timeout for live checks")
 	fs.Parse(args)
@@ -72,12 +72,13 @@ func cmdPlan(args []string) {
 		}
 	}
 	printPlanReport(report, format)
-	os.Exit(exitForPlan(report, *failOn))
+	os.Exit(exitForPlan(report, effectiveFailOn(*failOn, cfg.Policy.FailOn, "critical")))
 }
 
 func buildPlanReport(file string, cfg certopsConfig, opts planOptions) planReport {
 	report := planReport{File: file, Status: "ok"}
 	report.Items = append(report.Items, planCAItems(cfg)...)
+	report.Items = append(report.Items, planCRLItems(cfg)...)
 	report.Items = append(report.Items, planInventoryItems(cfg)...)
 	report.Items = append(report.Items, planTrustItems(cfg)...)
 	report.Items = append(report.Items, planServiceItems(cfg)...)
@@ -87,6 +88,38 @@ func buildPlanReport(file string, cfg certopsConfig, opts planOptions) planRepor
 	report.Summary = summarizePlan(report.Items)
 	report.Status = statusFromSummary(report.Summary)
 	return report
+}
+
+func planCRLItems(cfg certopsConfig) []planItem {
+	items := []planItem{}
+	cas := caNameSet(cfg)
+	for _, crl := range cfg.CRLs {
+		item := planItem{Action: "verify", Scope: "crl", Target: crl.Name, Status: "ok", Change: "CRL source configured"}
+		source := configuredCRLSource(crl)
+		item.Expected = source
+		if strings.TrimSpace(source) == "" {
+			item.Status = "critical"
+			item.Change = "CRL source is incomplete"
+			item.Expected = "file or url"
+			item.Actual = "missing"
+		}
+		if strings.TrimSpace(crl.CA) != "" && !cas[crl.CA] {
+			item.Status = "critical"
+			item.Change = "CRL references unknown CA"
+			item.Expected = crl.CA
+			item.Actual = "missing"
+		}
+		items = append(items, item)
+	}
+	for _, service := range cfg.Services {
+		target := servicePlanTarget(service)
+		for _, name := range service.CRLs {
+			if !crlNameSet(cfg)[name] {
+				items = append(items, planItem{Action: "fail", Scope: "service", Target: target, Status: "critical", Change: "service references unknown CRL", Expected: name, Actual: "missing"})
+			}
+		}
+	}
+	return items
 }
 
 func planCAItems(cfg certopsConfig) []planItem {
@@ -241,6 +274,14 @@ func caNameSet(cfg certopsConfig) map[string]bool {
 	return out
 }
 
+func crlNameSet(cfg certopsConfig) map[string]bool {
+	out := map[string]bool{}
+	for _, crl := range cfg.CRLs {
+		out[crl.Name] = true
+	}
+	return out
+}
+
 func groupNameSet(cfg certopsConfig) map[string]bool {
 	out := map[string]bool{}
 	for name := range cfg.Inventory.Groups {
@@ -304,10 +345,7 @@ func printPlanReport(report planReport, format outputFormat) {
 }
 
 func exitForPlan(report planReport, failOn string) int {
-	failOn = strings.ToLower(strings.TrimSpace(failOn))
-	if failOn == "" {
-		failOn = "critical"
-	}
+	failOn = effectiveFailOn(failOn, "", "critical")
 	if report.Summary.Critical > 0 {
 		return 1
 	}
@@ -315,4 +353,14 @@ func exitForPlan(report planReport, failOn string) int {
 		return 1
 	}
 	return 0
+}
+
+func effectiveFailOn(cliValue, configValue, fallback string) string {
+	for _, value := range []string{cliValue, configValue, fallback} {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value != "" {
+			return value
+		}
+	}
+	return "critical"
 }

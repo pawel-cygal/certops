@@ -23,7 +23,8 @@ only report state. Commands that change trust stores require explicit `--yes`.
 
 - Declarative `certops.yaml` with CA providers, inventory, trust targets, and services.
 - CA provider checks for Smallstep, Vault PKI, CFSSL-compatible APIs, and generic PEM bundles or URLs.
-- TLS endpoint checks for expiry, SAN/hostname match, chain trust, TLS versions, ALPN, OCSP stapling, redirects, and HSTS.
+- TLS endpoint checks for expiry, SAN/hostname match, chain trust, CRL revocation, TLS versions, ALPN, OCSP stapling, redirects, and HSTS.
+- CRL checks for fetch/parse status, `thisUpdate`, `nextUpdate`, signature validity, CRL number, and revoked-entry counts.
 - Drift reports that compare configured PKI state with live CA and service checks.
 - Local trust-store plan, verify, and install for CA bundles.
 - Remote Linux trust-store plan, apply, verify, and remove over SSH.
@@ -60,6 +61,8 @@ policy:
   fail_on: warn
   min_ca_days_remaining: 180
   min_leaf_days_remaining: 30
+  min_crl_days_remaining: 3
+  max_crl_age_days: 7
   allow_unmanaged_roots: false
 
 cas:
@@ -78,6 +81,13 @@ cas:
     provider: generic
     ca_bundle: vendor-root.pem
     fingerprint: SHA256:11:22:...
+
+crls:
+  - name: lan-step-crl
+    ca: lan-step
+    url: https://ca.lan.example.com/crl
+    warn_days: 3
+    critical_days: 1
 
 inventory:
   groups:
@@ -100,6 +110,8 @@ services:
   - name: internal-api
     url: https://api.lan.example.com
     ca: lan-step
+    crls:
+      - lan-step-crl
     expected_names:
       - api.lan.example.com
     require_tls13: true
@@ -147,6 +159,20 @@ Use `--fingerprint` when fetching CA material from a URL. `--insecure` exists
 for bootstrap cases where the CA HTTPS endpoint is not trusted yet; pin the
 fingerprint in the same command.
 
+### CRL Checks
+
+```bash
+certops crl check --file ca.crl --ca-bundle issuer.pem
+certops crl check --url https://pki.example.com/ca.crl --ca-bundle issuer.pem --prom
+certops check api.example.com --ca-bundle roots.pem --crl ca.crl --crl-ca-bundle issuer.pem
+```
+
+`crl check` accepts PEM or DER CRLs. It reports `thisUpdate`, `nextUpdate`,
+days remaining, CRL number, revoked-entry count, SHA-256 fingerprint, and CRL
+signature status when `--ca-bundle` is provided. `check` and `scan` accept
+repeatable `--crl` values and mark a target critical when a certificate in the
+presented chain is listed as revoked.
+
 ### Plan And Drift
 
 ```bash
@@ -159,10 +185,12 @@ certops drift -f certops.yaml --no-live
 certops drift -f certops.yaml --html certops-drift.html
 ```
 
-`plan` validates the configured CA providers, inventory, trust policies, and
-services. With `--live`, it also fetches configured CA roots and runs live TLS
-checks for configured services.
+`plan` validates the configured CA providers, CRLs, inventory, trust policies,
+and services. With `--live`, it also fetches configured CA roots, checks CA
+expiry against `policy.min_ca_days_remaining`, checks CRL freshness, and runs
+live TLS checks plus service policy checks for configured services.
 
+`plan` and `drift` use `policy.fail_on` when `--fail-on` is not provided.
 `drift` uses the same model and reports non-OK or manual items. Use `--no-live`
 for static config drift only.
 
@@ -203,13 +231,16 @@ certops check example.com
 certops check https://api.example.com
 certops check example.com:8443 --json
 certops check internal.example.com --ca-bundle smallstep-root.pem
+certops check internal.example.com --ca-bundle smallstep-root.pem --crl ca.crl --crl-ca-bundle smallstep-root.pem
 certops check api.example.com --watch --until-ok --interval 5s
 certops check api.example.com --html certops-report.html
 ```
 
 `check` accepts `host`, `host:port`, or `https://host`. It supports
 `--json`, `--yaml`, `--prom`, `--html`, `--otel-endpoint`, `--warn-days`,
-`--critical-days`, `--ca-bundle`, `--fail-on`, and watch flags.
+`--critical-days`, `--ca-bundle`, repeatable `--crl`, `--crl-ca-bundle`,
+`--crl-warn-days`, `--crl-critical-days`, `--crl-max-age-days`, `--fail-on`,
+and watch flags.
 
 Scan multiple targets:
 
